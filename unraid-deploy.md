@@ -2,31 +2,21 @@
 
 ## Prerequisites
 
-- Docker Desktop with `buildx` (macOS default)
 - SSH access to Unraid (`root@<UNRAID_IP>`)
 
 ## First-Time Setup
 
-### 1. Build for x86_64
-
-```bash
-docker buildx build --platform linux/amd64 -t dispatch . --load
-```
-
-### 2. Transfer to Unraid
-
-```bash
-docker save dispatch | gzip > /tmp/dispatch.tar.gz
-scp /tmp/dispatch.tar.gz root@<UNRAID_IP>:/mnt/user/appdata/dispatch/
-```
-
-### 3. Start on Unraid
+### 1. Pull the image
 
 ```bash
 ssh root@<UNRAID_IP>
 
-docker load < /mnt/user/appdata/dispatch/dispatch.tar.gz
+docker pull ghcr.io/icsta/dispatch:latest
+```
 
+### 2. Start the containers
+
+```bash
 # Start Postgres
 docker run -d \
   --name dispatch-db \
@@ -44,44 +34,50 @@ docker run -d \
   -e DATABASE_URL=postgres://sprint:sprint@dispatch-db:5432/sprint_tracker \
   --link dispatch-db:db \
   --restart unless-stopped \
-  dispatch
+  ghcr.io/icsta/dispatch:latest
 ```
 
 Note: The `--link` flag maps `dispatch-db` to hostname `db` inside the app container. Update `DATABASE_URL` host accordingly if using Docker networks instead.
 
-### 4. Register MCP in Claude Code
+### 3. Register MCP in Claude Code
 
 ```bash
 claude mcp add -s user -t http dispatch http://<UNRAID_IP>:3888/mcp
 ```
 
-## Updating After Code Changes
-
-### 1. Build and transfer
-
-```bash
-docker buildx build --platform linux/amd64 -t dispatch . --load
-docker save dispatch | gzip > /tmp/dispatch.tar.gz
-scp /tmp/dispatch.tar.gz root@<UNRAID_IP>:/mnt/user/appdata/dispatch/
-```
-
-### 2. Replace on Unraid
+## Updating
 
 ```bash
 ssh root@<UNRAID_IP>
 
+docker pull ghcr.io/icsta/dispatch:latest
 docker stop dispatch && docker rm dispatch
-docker load < /mnt/user/appdata/dispatch/dispatch.tar.gz
 docker run -d \
   --name dispatch \
   -p 3888:3001 \
   -e DATABASE_URL=postgres://sprint:sprint@dispatch-db:5432/sprint_tracker \
   --link dispatch-db:db \
   --restart unless-stopped \
-  dispatch
+  ghcr.io/icsta/dispatch:latest
 ```
 
 Postgres container stays running — data persists across app updates.
+
+## Building from Source
+
+If you prefer to build locally instead of pulling from GHCR:
+
+```bash
+# On your Mac (builds for x86_64)
+docker buildx build --platform linux/amd64 --no-cache -t dispatch . --load
+docker save dispatch | gzip > /tmp/dispatch.tar.gz
+scp /tmp/dispatch.tar.gz root@<UNRAID_IP>:/mnt/user/appdata/dispatch/
+
+# On Unraid
+docker load < /mnt/user/appdata/dispatch/dispatch.tar.gz
+```
+
+Then use `dispatch` instead of `ghcr.io/icsta/dispatch:latest` in the run commands above.
 
 ## Endpoints
 
