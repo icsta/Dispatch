@@ -39,13 +39,23 @@ Two Docker containers. Four dependencies (`@modelcontextprotocol/sdk`, `express`
 
 ### 1. Start the containers
 
+**Option A: Docker Compose (recommended)**
+
 ```bash
 git clone https://github.com/icsta/Dispatch.git dispatch
 cd dispatch
 docker compose up -d
 ```
 
-This starts PostgreSQL and the MCP server. The database schema is applied automatically on first boot.
+**Option B: Pre-built image from GHCR**
+
+```bash
+docker pull ghcr.io/icsta/dispatch:latest
+```
+
+See [docker-compose.yml](docker-compose.yml) for the full setup including PostgreSQL.
+
+The database schema is applied automatically on first boot.
 
 ### 2. Connect Claude Code
 
