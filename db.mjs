@@ -784,31 +784,47 @@ export async function completeIssue(issueId, summary) {
 // ── Workflow: log_progress ──
 
 export async function logProgress(issueId, note, agentId, completeTaskIds) {
-  const { rows: issues } = await pool.query(`SELECT title FROM issues WHERE id = $1`, [issueId]);
-  if (!issues.length) return "Issue not found.";
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  await logActivity(issueId, note, agentId);
+    const { rows: issues } = await client.query(`SELECT title FROM issues WHERE id = $1`, [issueId]);
+    if (!issues.length) { await client.query("ROLLBACK"); return "Issue not found."; }
 
-  // Complete specified tasks
-  if (completeTaskIds && completeTaskIds.length) {
-    await pool.query(
-      `UPDATE tasks SET completed = true WHERE id = ANY($1) AND issue_id = $2`,
-      [completeTaskIds, issueId]
+    await client.query(
+      `INSERT INTO activity_log (issue_id, entry, agent) VALUES ($1, $2, $3)`,
+      [issueId, note, agentId || null]
     );
-  }
 
-  // Task progress
-  const { rows: tasks } = await pool.query(
-    `SELECT completed FROM tasks WHERE issue_id = $1`,
-    [issueId]
-  );
-  let taskLine = "";
-  if (tasks.length) {
-    const done = tasks.filter((t) => t.completed).length;
-    taskLine = `\nTasks: ${done}/${tasks.length} completed`;
-  }
+    // Complete specified tasks
+    if (completeTaskIds && completeTaskIds.length) {
+      await client.query(
+        `UPDATE tasks SET completed = true WHERE id = ANY($1) AND issue_id = $2`,
+        [completeTaskIds, issueId]
+      );
+    }
 
-  return `Logged on "${issues[0].title}": "${note}"${taskLine}`;
+    // Task progress
+    const { rows: tasks } = await client.query(
+      `SELECT completed FROM tasks WHERE issue_id = $1`,
+      [issueId]
+    );
+
+    await client.query("COMMIT");
+
+    let taskLine = "";
+    if (tasks.length) {
+      const done = tasks.filter((t) => t.completed).length;
+      taskLine = `\nTasks: ${done}/${tasks.length} completed`;
+    }
+
+    return `Logged on "${issues[0].title}": "${note}"${taskLine}`;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Workflow: plan_sprint ──
