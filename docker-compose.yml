@@ -2,14 +2,14 @@ services:
   db:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: sprint_tracker
-      POSTGRES_USER: sprint
-      POSTGRES_PASSWORD: sprint
+      POSTGRES_DB: dispatch
+      POSTGRES_USER: dispatch
+      POSTGRES_PASSWORD: dispatch
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sprint"]
+      test: ["CMD-SHELL", "pg_isready -U dispatch"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -19,7 +19,7 @@ services:
     ports:
       - "3888:3001"
     environment:
-      DATABASE_URL: postgres://sprint:sprint@db:5432/sprint_tracker
+      DATABASE_URL: postgres://dispatch:dispatch@db:5432/dispatch
     depends_on:
       db:
         condition: service_healthy

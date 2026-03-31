@@ -330,7 +330,7 @@ claude mcp add -s user -t http dispatch http://<UNRAID_IP>:3888/mcp
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `postgres://sprint:sprint@localhost:5432/sprint_tracker` | PostgreSQL connection string |
+| `DATABASE_URL` | `postgres://dispatch:dispatch@localhost:5432/dispatch` | PostgreSQL connection string |
 | `PORT` | `3001` | Server listen port (mapped to 3888 externally) |
 
 ## Project Structure
