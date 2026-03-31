@@ -40,7 +40,7 @@ Two Docker containers. Four dependencies (`@modelcontextprotocol/sdk`, `express`
 ### 1. Start the containers
 
 ```bash
-git clone <repo-url> dispatch
+git clone https://github.com/icsta/Dispatch.git dispatch
 cd dispatch
 docker compose up -d
 ```
@@ -118,7 +118,7 @@ When Agent 1 completes the database issue, "Build API endpoints" is automaticall
 
 ## Tools
 
-Dispatch exposes 25 MCP tools.
+Dispatch exposes 26 MCP tools.
 
 ### CRUD Tools
 
@@ -327,7 +327,7 @@ claude mcp add -s user -t http dispatch http://<UNRAID_IP>:3888/mcp
 
 ```
 dispatch/
-  server.mjs           Express + MCP server + 25 tool definitions
+  server.mjs           Express + MCP server + 26 tool definitions
   db.mjs               PostgreSQL queries + workflow logic
   init.sql             Database schema (6 tables + indexes)
   package.json         4 dependencies

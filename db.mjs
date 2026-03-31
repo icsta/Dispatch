@@ -9,6 +9,10 @@ const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL || "postgres://sprint:sprint@localhost:5432/sprint_tracker",
 });
 
+pool.on("error", (err) => {
+  console.error("Unexpected pool error:", err.message);
+});
+
 export async function init() {
   const sql = readFileSync(join(__dirname, "init.sql"), "utf-8");
   await pool.query(sql);
@@ -190,17 +194,14 @@ export async function deleteSprint(sprintId) {
 // ── Issues ──
 
 export async function createIssue(projectId, title, description, status, priority, sprintId) {
-  const { rows: maxRows } = await pool.query(
-    `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM issues WHERE project_id = $1`,
-    [projectId]
-  );
   const { rows } = await pool.query(
     `INSERT INTO issues (project_id, title, description, status, priority, sprint_id, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE((SELECT MAX(sort_order) + 1 FROM issues WHERE project_id = $1), 0))
+     RETURNING *`,
     [
       projectId, title, description || null,
       status || "backlog", priority || "medium",
-      sprintId || null, maxRows[0].next_order,
+      sprintId || null,
     ]
   );
   const issue = rows[0];
@@ -363,13 +364,11 @@ export async function searchIssues(projectId, query, status, priority) {
 // ── Tasks ──
 
 export async function createTask(issueId, title) {
-  const { rows: maxRows } = await pool.query(
-    `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tasks WHERE issue_id = $1`,
-    [issueId]
-  );
   const { rows } = await pool.query(
-    `INSERT INTO tasks (issue_id, title, sort_order) VALUES ($1, $2, $3) RETURNING *`,
-    [issueId, title, maxRows[0].next_order]
+    `INSERT INTO tasks (issue_id, title, sort_order)
+     VALUES ($1, $2, COALESCE((SELECT MAX(sort_order) + 1 FROM tasks WHERE issue_id = $1), 0))
+     RETURNING *`,
+    [issueId, title]
   );
   return `Added task: "[ ] ${rows[0].title}"\nID: ${rows[0].id}`;
 }
@@ -606,10 +605,16 @@ export async function sprintSummary(projectId) {
     out += `Active: ${parts.join(" | ")}\n`;
   }
 
-  // Next up
+  // Next up (respects dependencies)
   const { rows: next } = await pool.query(
-    `SELECT * FROM issues WHERE sprint_id = $1 AND status IN ('todo', 'backlog') AND assigned_to IS NULL
-     ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, sort_order ASC
+    `SELECT i.* FROM issues i
+     WHERE i.sprint_id = $1 AND i.status IN ('todo', 'backlog') AND i.assigned_to IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM dependencies d
+         JOIN issues blocker ON blocker.id = d.depends_on_id
+         WHERE d.issue_id = i.id AND blocker.status != 'done'
+       )
+     ORDER BY CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, i.sort_order ASC
      LIMIT 1`,
     [sprint.id]
   );
@@ -639,15 +644,15 @@ export async function claimNext(projectId, agentId, preferIssueId, branch) {
 
     let issue;
     if (preferIssueId) {
-      // Claim specific issue
+      // Claim specific issue — must belong to active sprint in this project
       const { rows } = await client.query(
-        `SELECT * FROM issues WHERE id = $1 AND status IN ('todo', 'backlog') FOR UPDATE SKIP LOCKED`,
-        [preferIssueId]
+        `SELECT * FROM issues WHERE id = $1 AND sprint_id = $2 AND status IN ('todo', 'backlog') FOR UPDATE SKIP LOCKED`,
+        [preferIssueId, sprints[0].id]
       );
       issue = rows[0];
       if (!issue) {
         await client.query("ROLLBACK");
-        return "Issue not found or already claimed.";
+        return "Issue not found, not in the active sprint, or already claimed.";
       }
       // Check dependencies
       const { rows: blockers } = await client.query(
@@ -726,42 +731,54 @@ export async function claimNext(projectId, agentId, preferIssueId, branch) {
 // ── Workflow: complete_issue ──
 
 export async function completeIssue(issueId, summary) {
-  const { rows: issues } = await pool.query(`SELECT * FROM issues WHERE id = $1`, [issueId]);
-  if (!issues.length) return "Issue not found.";
-  const issue = issues[0];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  // Mark done, clear assignment
-  await pool.query(
-    `UPDATE issues SET status = 'done', assigned_to = NULL, updated_at = now() WHERE id = $1`,
-    [issueId]
-  );
+    const { rows: issues } = await client.query(`SELECT * FROM issues WHERE id = $1`, [issueId]);
+    if (!issues.length) { await client.query("ROLLBACK"); return "Issue not found."; }
+    const issue = issues[0];
 
-  // Complete all tasks
-  await pool.query(`UPDATE tasks SET completed = true WHERE issue_id = $1`, [issueId]);
-
-  // Log activity
-  await pool.query(
-    `INSERT INTO activity_log (issue_id, entry, agent) VALUES ($1, $2, $3)`,
-    [issueId, `Completed: ${summary}`, issue.assigned_to]
-  );
-
-  // Sprint progress
-  let progressLine = "";
-  if (issue.sprint_id) {
-    const { rows } = await pool.query(
-      `SELECT status, count(*)::int AS count FROM issues WHERE sprint_id = $1 GROUP BY status`,
-      [issue.sprint_id]
+    // Mark done, clear assignment
+    await client.query(
+      `UPDATE issues SET status = 'done', assigned_to = NULL, updated_at = now() WHERE id = $1`,
+      [issueId]
     );
-    const counts = { backlog: 0, todo: 0, in_progress: 0, done: 0, cancelled: 0 };
-    for (const r of rows) counts[r.status] = r.count;
-    const total = Object.values(counts).reduce((a, b) => a + b, 0);
-    const pct = total ? Math.round((counts.done / total) * 100) : 0;
-    progressLine = `Sprint: ${counts.done}/${total} done (${pct}%) | ${counts.in_progress} in_progress | ${counts.todo + counts.backlog} todo`;
-  }
 
-  let out = `DONE: "${issue.title}"\nLogged: "${summary}"`;
-  if (progressLine) out += `\n${progressLine}`;
-  return out;
+    // Complete all tasks
+    await client.query(`UPDATE tasks SET completed = true WHERE issue_id = $1`, [issueId]);
+
+    // Log activity
+    await client.query(
+      `INSERT INTO activity_log (issue_id, entry, agent) VALUES ($1, $2, $3)`,
+      [issueId, `Completed: ${summary}`, issue.assigned_to]
+    );
+
+    // Sprint progress
+    let progressLine = "";
+    if (issue.sprint_id) {
+      const { rows } = await client.query(
+        `SELECT status, count(*)::int AS count FROM issues WHERE sprint_id = $1 GROUP BY status`,
+        [issue.sprint_id]
+      );
+      const counts = { backlog: 0, todo: 0, in_progress: 0, done: 0, cancelled: 0 };
+      for (const r of rows) counts[r.status] = r.count;
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      const pct = total ? Math.round((counts.done / total) * 100) : 0;
+      progressLine = `Sprint: ${counts.done}/${total} done (${pct}%) | ${counts.in_progress} in_progress | ${counts.todo + counts.backlog} todo`;
+    }
+
+    await client.query("COMMIT");
+
+    let out = `DONE: "${issue.title}"\nLogged: "${summary}"`;
+    if (progressLine) out += `\n${progressLine}`;
+    return out;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Workflow: log_progress ──
@@ -796,12 +813,22 @@ export async function logProgress(issueId, note, agentId, completeTaskIds) {
 
 // ── Workflow: plan_sprint ──
 
+const VALID_PRIORITIES = new Set(["urgent", "high", "medium", "low", "none"]);
+
 export async function planSprint(sprintId, issueSpecs) {
   const { rows: sprints } = await pool.query(`SELECT * FROM sprints WHERE id = $1`, [sprintId]);
   if (!sprints.length) return "Sprint not found.";
+  const projectId = sprints[0].project_id;
 
   let added = 0;
+  const skipped = [];
   for (const spec of issueSpecs) {
+    if (!spec.issue_id) { skipped.push("missing issue_id"); continue; }
+    if (spec.priority && !VALID_PRIORITIES.has(spec.priority)) {
+      skipped.push(`"${spec.issue_id}" — invalid priority "${spec.priority}"`);
+      continue;
+    }
+
     const sets = [`sprint_id = $1`, `updated_at = now()`];
     const vals = [sprintId];
     let i = 2;
@@ -816,8 +843,12 @@ export async function planSprint(sprintId, issueSpecs) {
     sets.push(`status = CASE WHEN status = 'backlog' THEN 'todo' ELSE status END`);
 
     vals.push(spec.issue_id);
-    await pool.query(`UPDATE issues SET ${sets.join(", ")} WHERE id = $${i}`, vals);
-    added++;
+    vals.push(projectId);
+    const { rowCount } = await pool.query(
+      `UPDATE issues SET ${sets.join(", ")} WHERE id = $${i} AND project_id = $${i + 1}`,
+      vals
+    );
+    if (rowCount) { added++; } else { skipped.push(`"${spec.issue_id}" — not found in this project`); }
   }
 
   // Return sprint overview
@@ -829,7 +860,9 @@ export async function planSprint(sprintId, issueSpecs) {
   for (const r of rows) counts[r.status] = r.count;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
 
-  return `Added ${added} issue(s) to sprint "${sprints[0].name}".\nSprint now has ${total} issues: ${counts.todo} todo, ${counts.in_progress} in_progress, ${counts.done} done`;
+  let out = `Added ${added} issue(s) to sprint "${sprints[0].name}".\nSprint now has ${total} issues: ${counts.todo} todo, ${counts.in_progress} in_progress, ${counts.done} done`;
+  if (skipped.length) out += `\nSkipped: ${skipped.join(", ")}`;
+  return out;
 }
 
 // ── Workflow: backlog ──

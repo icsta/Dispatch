@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "sprint-tracker": {
+    "dispatch": {
       "type": "http",
       "url": "http://localhost:3888/mcp"
     }

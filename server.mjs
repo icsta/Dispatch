@@ -38,7 +38,7 @@ Architect agents scope work and set dependencies. Developer agents just call cla
     return text(await db.updateProject(project_id, { name, description, status }));
   });
 
-  server.tool("delete_project", "Delete a project and all its sprints, issues, tasks, and activity", {
+  server.tool("delete_project", "Delete a project. Must have no sprints or issues — delete those first.", {
     project_id: z.string().describe("Project ID"),
   }, async ({ project_id }) => {
     return text(await db.deleteProject(project_id));
@@ -73,7 +73,7 @@ Architect agents scope work and set dependencies. Developer agents just call cla
     return text(await db.listSprints(project_id));
   });
 
-  server.tool("delete_sprint", "Delete a sprint. Issues in it are unassigned, not deleted.", {
+  server.tool("delete_sprint", "Delete a sprint. Must have no issues assigned — remove or reassign them first.", {
     sprint_id: z.string().describe("Sprint ID"),
   }, async ({ sprint_id }) => {
     return text(await db.deleteSprint(sprint_id));
@@ -103,7 +103,7 @@ Architect agents scope work and set dependencies. Developer agents just call cla
     return text(await db.updateIssue(issue_id, { title, description, status, priority, sprintId: sprint_id }));
   });
 
-  server.tool("delete_issue", "Delete an issue and its tasks/activity", {
+  server.tool("delete_issue", "Delete an issue. Must have no tasks — delete those first. Activity log is cleaned up automatically.", {
     issue_id: z.string().describe("Issue ID"),
   }, async ({ issue_id }) => {
     return text(await db.deleteIssue(issue_id));
@@ -273,7 +273,7 @@ async function start() {
   await db.init();
   console.log("Database initialized.");
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Sprint Tracker MCP listening on http://0.0.0.0:${PORT}/mcp`);
+    console.log(`Dispatch MCP listening on http://0.0.0.0:${PORT}/mcp`);
   });
 }
 
