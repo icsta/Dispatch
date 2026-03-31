@@ -1,0 +1,17 @@
+{
+  "name": "dispatch",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Agent-native sprint tracker via MCP",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "express": "^5.1.0",
+    "pg": "^8.16.0",
+    "zod": "^3.25.67"
+  }
+}
